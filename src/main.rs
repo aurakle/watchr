@@ -134,15 +134,15 @@ async fn run() -> Result<(), String> {
                         info!("Connected! HTTP response: {res:?}");
 
                         //TODO: remove unwrap
-                        let mut reader = StreamDownload::new_http(format!("http://{}:{}/media", args.addr, args.port).parse().unwrap(), TempStorageProvider::new(), Settings::default()).await.unwrap();
+                        let mut reader = StreamDownload::new_http(format!("http://{}:{}/media.mkv", args.addr, args.port).parse().unwrap(), TempStorageProvider::new(), Settings::default()).await.unwrap();
 
                         spawn(move || {
                             //TODO: remove unwrap
-                            let mut writer = std::fs::OpenOptions::new().write(true).create(true).open(shellexpand::tilde("~/.config/watchr/media").to_string()).unwrap();
+                            let mut writer = std::fs::OpenOptions::new().write(true).create(true).open(shellexpand::tilde("~/.config/watchr/media.mkv").to_string()).unwrap();
                             std::io::copy(&mut reader, &mut writer);
                         });
 
-                        let mut stream = start_mpv("~/.config/watchr/media").await?;
+                        let mut stream = start_mpv("~/.config/watchr/media.mkv").await?;
                         let (reader, writer) = &mut stream.split();
 
                         loop {
@@ -241,7 +241,7 @@ async fn api(req: HttpRequest, stream: Payload, args: Data<ServerArgs>) -> Resul
     Ok(res)
 }
 
-#[get("/media")]
+#[get("/media.mkv")]
 async fn media(req: HttpRequest, args: Data<ServerArgs>) -> impl Responder {
     match NamedFile::open_async(shellexpand::tilde(&args.file).as_ref()).await {
         Ok(res) => res.respond_to(&req),
