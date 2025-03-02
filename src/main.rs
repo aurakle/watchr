@@ -1,9 +1,13 @@
-use std::{fmt::Binary, fs, io::{BufRead, BufReader, BufWriter, Write}, os::unix::net::UnixStream, process, thread::{self, sleep, spawn}, time::Duration};
+use std::{fs, io::{BufRead, BufReader, BufWriter, Write}, os::unix::net::UnixStream, process, sync::{Mutex, OnceLock}, thread::{sleep, spawn}, time::Duration};
 
+use actix_files::NamedFile;
 use actix_web::{rt::time::timeout, web::{self, Data, Payload}, App, Error, HttpRequest, HttpResponse, HttpServer, Responder};
+use actix_ws::Session;
 use awc::Client;
+use awc::ws::Frame::Binary;
 use clap::{command, Parser, Subcommand};
 use env_logger::Target;
+use futures::StreamExt;
 use log::{error, info, warn, LevelFilter};
 use serde::Serialize;
 use serde_json::json;
@@ -54,6 +58,48 @@ struct IpcEvent {
     name: String,
 }
 
+struct Clients {
+    connections: Mutex<Vec<Session>>
+}
+
+impl Clients {
+    pub fn empty() -> Self {
+        Self {
+            connections: Mutex::new(Vec::new())
+        }
+    }
+
+    pub fn push(&self, session: Session) {
+        self.connections.lock().unwrap().push(session);
+    }
+
+    pub async fn update(&self, property: String, value: String) {
+        let mut response = Vec::new();
+        response.append(property.as_bytes());
+        response.push(0u8);
+        response.append(value.as_bytes());
+
+        let sessions = self.connections.lock().unwrap();
+        sessions.retain(|session| async {
+            match session.binary(response.clone()).await {
+                Ok(_) => true,
+                Err(_) => {
+                    info!("A client has disconnected");
+                    false
+                }
+            }
+        });
+
+        let len = sessions.len();
+        info!("{} client{} updated", len, if len == 1 { "" } else { "s" });
+    }
+}
+
+fn get_clients() -> &'static Clients {
+    static CLIENTS: OnceLock<Clients> = OnceLock::new();
+    CLIENTS.get_or_init(|| Clients::empty())
+}
+
 #[actix_web::main]
 async fn main() {
     env_logger::Builder::from_default_env()
@@ -79,10 +125,16 @@ async fn run() -> Result<(), String> {
                     Ok((res, mut ws)) => {
                         info!("Connected! HTTP response: {res:?}");
 
+                        //TODO: open mpv with the file at /media
+
                         loop {
                             match timeout(Duration::from_secs(20), ws.next()).await {
                                 Ok(Some(msg)) => {
-                                    //TODO: property-set mpv based on received message
+                                    if let Ok(Binary(msg)) = msg {
+                                        let property = Vec::from(msg);
+                                        let value = property.split_off(property.binary_search(&0u8));
+                                        //TODO: update mpv
+                                    }
                                 },
                                 Ok(None) => {
                                     warn!("Got disconnected! Attempting to reconnect in 5 seconds.");
@@ -120,11 +172,15 @@ async fn run() -> Result<(), String> {
                 .output()
                 .or_else(|e| Err(format!("Failed to execute mpv: {e}")))?;
 
-            spawn(move || {
+            spawn(move || async {
                 let mut stream = UnixStream::connect(shellexpand::tilde("~/.config/watchr/sock").as_ref())
                     .or_else(|e| Err(format!("Failed to open UNIX socket: {e}")))?;
                 let mut writer = BufWriter::new(stream);
                 let mut reader = BufReader::new(stream);
+
+                //TODO: probably not necessary
+                // writer.write(make_command(json!(["disable_event", "all"])));
+                // writer.write(&['\n']);
 
                 writer.write(make_command(json!(["observe_property_string", 1, "pause"])));
                 writer.write(&['\n']);
@@ -139,7 +195,7 @@ async fn run() -> Result<(), String> {
                         match line {
                             Ok(string) => match serde_json::from_str::<IpcEvent>(string.as_ref()) {
                                 Ok(event) => if (event.event == String::from("property-change")) {
-                                    update_clients(event.name, event.data);
+                                    get_clients().update(event.name, event.data).await;
                                 },
                                 Err(_) => {}
                             },
@@ -155,22 +211,20 @@ async fn run() -> Result<(), String> {
     }
 }
 
-fn update_clients(property: String, value: String) {
-    //TODO: aaaaaaaa update the clients so they property-set
-}
-
 #[get("/api")]
 async fn api(req: HttpRequest, stream: Payload, args: Data<ServerArgs>) -> Result<HttpResponse, Error> {
     info!("Client {} attempting to connect...", req.peer_addr().map_or("<unknown>".to_string(), |addr| addr.ip().to_canonical().to_string()));
     let (res, session, stream) = actix_ws::handle(&req, stream)?;
 
-    //TODO: add client to the connected clients in a fashion similar to connectr
-
+    get_clients().push(session);
     info!("Client connected!");
     Ok(res)
 }
 
 #[get("/media")]
 async fn media(req: HttpRequest, args: Data<ServerArgs>) -> impl Responder {
-    //TODO: deliver the current media
+    match NamedFile::open_async(shellexpand::tilde(args.file.as_ref())).await {
+        Ok(res) => res,
+        Err(_) => HttpResponse::InternalServerError().finish()
+    }
 }
