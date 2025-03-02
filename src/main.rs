@@ -116,7 +116,7 @@ async fn main() {
         .init();
 
     match run().await {
-        Err(message) => error!("Server failure: {message}"),
+        Err(message) => error!("Failure: {message}"),
         _ => ()
     }
 }
@@ -154,8 +154,8 @@ async fn run() -> Result<(), String> {
                                         //on the slightest malformed message from the host
                                         //TODO: also stop unwrapping!
                                         let value = property.split_off(property.binary_search(&0u8).map_err(|e| format!("Received message is not valid: {e}"))? + 1);
-                                        writer.write(make_command(json!(["set_property_string", String::from_utf8(property).unwrap(), String::from_utf8(value).unwrap()])).as_bytes());
-                                        writer.write(&[b'\n']);
+                                        writer.write(make_command(json!(["set_property_string", String::from_utf8(property).unwrap(), String::from_utf8(value).unwrap()])).as_bytes()).await;
+                                        writer.write(&[b'\n']).await;
                                     }
                                 },
                                 Ok(None) => {
@@ -202,13 +202,13 @@ async fn run() -> Result<(), String> {
                 // writer.write(make_command(json!(["disable_event", "all"])).as_bytes());
                 // writer.write(&[b'\n']);
 
-                writer.write(make_command(json!(["observe_property_string", 1, "pause"])).as_bytes());
-                writer.write(&[b'\n']);
+                rt.block_on(writer.write(make_command(json!(["observe_property_string", 1, "pause"])).as_bytes()));
+                rt.block_on(writer.write(&[b'\n']));
 
-                writer.write(make_command(json!(["observe_property_string", 2, "playback-time"])).as_bytes()); //TODO: this might get weird
-                writer.write(&[b'\n']);
+                rt.block_on(writer.write(make_command(json!(["observe_property_string", 2, "playback-time"])).as_bytes())); //TODO: this might get weird
+                rt.block_on(writer.write(&[b'\n']));
 
-                writer.flush();
+                rt.block_on(writer.flush());
 
                 let mut reader = BufReader::new(reader);
                 loop {
