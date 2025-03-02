@@ -132,7 +132,9 @@ async fn run() -> Result<(), String> {
                                 Ok(Some(msg)) => {
                                     if let Ok(Binary(msg)) = msg {
                                         let property = Vec::from(msg);
-                                        let value = property.split_off(property.binary_search(&0u8));
+                                        //TODO: the question mark on this line will cause a crash
+                                        //on the slightest malformed message from the host
+                                        let value = property.split_off(property.binary_search(&0u8).map_err(|e| format!("Received message is not valid: {e}"))? + 1);
                                         //TODO: update mpv
                                     }
                                 },
