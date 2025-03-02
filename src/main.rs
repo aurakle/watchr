@@ -1,4 +1,4 @@
-use std::{io::{BufRead, BufReader, Read, Write}, sync::{Mutex, OnceLock}, thread::spawn, time::Duration};
+use std::{io::{BufRead, Read, Write}, sync::{Mutex, OnceLock}, thread::spawn, time::Duration};
 
 use actix_files::NamedFile;
 use actix_web::{get, rt::time::timeout, web::{self, Data, Payload}, App, Error, HttpRequest, HttpResponse, HttpServer, Responder};
@@ -7,13 +7,12 @@ use awc::Client;
 use awc::ws::Frame::Binary;
 use clap::{Parser, Subcommand};
 use env_logger::Target;
-use futures::{executor::block_on, io::AllowStdIo, StreamExt};
+use futures::StreamExt;
 use log::{error, info, warn, LevelFilter};
 use serde::Deserialize;
-use tokio::{io::AsyncWriteExt, io::AsyncReadExt, time::sleep};
+use tokio::{io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader}, time::sleep};
 use serde_json::json;
 use stream_download::{storage::temp::TempStorageProvider, Settings, StreamDownload};
-use tokio_util::io::SyncIoBridge;
 use util::start_mpv;
 
 use crate::util::make_command;
@@ -85,8 +84,12 @@ impl Clients {
 
         let mut sessions = self.connections.lock().unwrap();
         sessions.retain_mut(|session| {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap(); //TODO: bad unwrap?
             //TODO: bad block_on?
-            match block_on(session.binary(response.clone())) {
+            match rt.block_on(session.binary(response.clone())) {
                 Ok(_) => true,
                 Err(_) => {
                     info!("A client has disconnected");
@@ -139,7 +142,7 @@ async fn run() -> Result<(), String> {
                             std::io::copy(&mut reader, &mut writer);
                         });
 
-                        let mut stream = start_mpv()?;
+                        let mut stream = start_mpv("~/.config/watchr/media").await?;
                         let (reader, writer) = &mut stream.split();
 
                         loop {
@@ -180,14 +183,19 @@ async fn run() -> Result<(), String> {
             let server = HttpServer::new(move || {
                 App::new()
                     .app_data(web::Data::new(args.clone()))
+                    .service(media)
                     .service(api)
             })
                 .bind((addr, port))
                 .or_else(|e| Err(format!("Failed to bind to address: {e}")))?;
 
             spawn(move || {
-                let mut stream = start_mpv().unwrap();
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap(); //TODO: is this unwrap bad?
                 //TODO: remove unwrap
+                let mut stream = rt.block_on(start_mpv(&file)).unwrap();
                 let (reader, writer) = &mut stream.split();
 
                 //TODO: probably not necessary
@@ -202,15 +210,15 @@ async fn run() -> Result<(), String> {
 
                 writer.flush();
 
-                let mut reader = BufReader::new(SyncIoBridge::new(reader));
+                let mut reader = BufReader::new(reader);
                 loop {
                     let mut line = "".to_string();
-                    reader.read_line(&mut line);
+                    rt.block_on(reader.read_line(&mut line));
 
                     match serde_json::from_str::<IpcEvent>(&line) {
                         Ok(event) => if event.event == String::from("property-change") {
                             //TODO: bad block_on?
-                            block_on(get_clients().update(event.name, event.data));
+                            rt.block_on(get_clients().update(event.name, event.data));
                         },
                         Err(_) => {}
                     }
