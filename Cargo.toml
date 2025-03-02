@@ -1,0 +1,15 @@
+[package]
+name = "watchr"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+actix-web = "4.9.0"
+actix-ws = "0.3.0"
+awc = "3.5.1"
+clap = { version = "4.5.31", features = ["derive"] }
+env_logger = "0.11.6"
+log = "0.4.26"
+serde = "1.0.218"
+serde_json = "1.0.139"
+shellexpand = "3.1.0"
