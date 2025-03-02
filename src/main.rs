@@ -6,6 +6,11 @@ use clap::{command, Parser, Subcommand};
 use env_logger::Target;
 use log::{error, info, warn, LevelFilter};
 use serde::Serialize;
+use serde_json::json;
+
+use crate::util::make_command;
+
+mod util;
 
 #[derive(Debug, Parser)]
 #[command(name = "watchr")]
@@ -41,11 +46,13 @@ struct ClientArgs {
     port: u16,
 }
 
-//TODO: what
-// #[derive(Debug, Serialize)]
-// struct IpcCommand<T: Serialize> {
-//     command: T,
-// }
+#[derive(Debug, Deserialize)]
+struct IpcEvent {
+    event: String,
+    id: i32,
+    data: String,
+    name: String,
+}
 
 #[actix_web::main]
 async fn main() {
@@ -75,14 +82,7 @@ async fn run() -> Result<(), String> {
                         loop {
                             match timeout(Duration::from_secs(20), ws.next()).await {
                                 Ok(Some(msg)) => {
-                                    //TODO: what (make this actually behave properly)
-                                    // if let Ok(Binary(msg)) = msg {
-                                    //     if msg[0] == 0xff {
-                                    //         info!("Ping!");
-                                    //     } else {
-                                    //         info!("Ba-bump");
-                                    //     }
-                                    // }
+                                    //TODO: property-set mpv based on received message
                                 },
                                 Ok(None) => {
                                     warn!("Got disconnected! Attempting to reconnect in 5 seconds.");
@@ -126,12 +126,25 @@ async fn run() -> Result<(), String> {
                 let mut writer = BufWriter::new(stream);
                 let mut reader = BufReader::new(stream);
 
-                writer.write(serde_json::to_vec(/*TODO: IpcCommand?*/));
+                writer.write(make_command(json!(["observe_property_string", 1, "pause"])));
                 writer.write(&['\n']);
+
+                writer.write(make_command(json!(["observe_property_string", 2, "playback-time"]))); //TODO: this might get weird
+                writer.write(&['\n']);
+
+                writer.flush();
 
                 loop {
                     for line in reader.lines() {
-                        //TODO: handle events given by mpv
+                        match line {
+                            Ok(string) => match serde_json::from_str::<IpcEvent>(string.as_ref()) {
+                                Ok(event) => if (event.event == String::from("property-change")) {
+                                    update_clients(event.name, event.data);
+                                },
+                                Err(_) => {}
+                            },
+                            Err(_) => {}
+                        }
                     }
                 }
             });
@@ -142,8 +155,12 @@ async fn run() -> Result<(), String> {
     }
 }
 
+fn update_clients(property: String, value: String) {
+    //TODO: aaaaaaaa update the clients so they property-set
+}
+
 #[get("/api")]
-pub async fn api(req: HttpRequest, stream: Payload, args: Data<ServerArgs>) -> Result<HttpResponse, Error> {
+async fn api(req: HttpRequest, stream: Payload, args: Data<ServerArgs>) -> Result<HttpResponse, Error> {
     info!("Client {} attempting to connect...", req.peer_addr().map_or("<unknown>".to_string(), |addr| addr.ip().to_canonical().to_string()));
     let (res, session, stream) = actix_ws::handle(&req, stream)?;
 
@@ -154,6 +171,6 @@ pub async fn api(req: HttpRequest, stream: Payload, args: Data<ServerArgs>) -> R
 }
 
 #[get("/media")]
-pub async fn media(req: HttpRequest, args: Data<ServerArgs>) -> impl Responder {
+async fn media(req: HttpRequest, args: Data<ServerArgs>) -> impl Responder {
     //TODO: deliver the current media
 }
