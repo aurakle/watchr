@@ -1,16 +1,20 @@
-use std::{fs, io::{BufRead, BufReader, BufWriter, Write}, os::unix::net::UnixStream, process, sync::{Mutex, OnceLock}, thread::{sleep, spawn}, time::Duration};
+use std::{io::{BufRead, BufReader, Read, Write}, sync::{Mutex, OnceLock}, thread::spawn, time::Duration};
 
 use actix_files::NamedFile;
-use actix_web::{rt::time::timeout, web::{self, Data, Payload}, App, Error, HttpRequest, HttpResponse, HttpServer, Responder};
+use actix_web::{get, rt::time::timeout, web::{self, Data, Payload}, App, Error, HttpRequest, HttpResponse, HttpServer, Responder};
 use actix_ws::Session;
 use awc::Client;
 use awc::ws::Frame::Binary;
-use clap::{command, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 use env_logger::Target;
-use futures::StreamExt;
+use futures::{executor::block_on, io::AllowStdIo, StreamExt};
 use log::{error, info, warn, LevelFilter};
-use serde::Serialize;
+use serde::Deserialize;
+use tokio::{io::AsyncWriteExt, io::AsyncReadExt, time::sleep};
 use serde_json::json;
+use stream_download::{storage::temp::TempStorageProvider, Settings, StreamDownload};
+use tokio_util::io::SyncIoBridge;
+use util::start_mpv;
 
 use crate::util::make_command;
 
@@ -75,13 +79,14 @@ impl Clients {
 
     pub async fn update(&self, property: String, value: String) {
         let mut response = Vec::new();
-        response.append(property.as_bytes());
+        response.append(&mut property.as_bytes().to_vec());
         response.push(0u8);
-        response.append(value.as_bytes());
+        response.append(&mut value.as_bytes().to_vec());
 
-        let sessions = self.connections.lock().unwrap();
-        sessions.retain(|session| async {
-            match session.binary(response.clone()).await {
+        let mut sessions = self.connections.lock().unwrap();
+        sessions.retain_mut(|session| {
+            //TODO: bad block_on?
+            match block_on(session.binary(response.clone())) {
                 Ok(_) => true,
                 Err(_) => {
                     info!("A client has disconnected");
@@ -114,7 +119,7 @@ async fn main() {
 }
 
 async fn run() -> Result<(), String> {
-    fs::create_dir_all(shellexpand::tilde("~/.config/watchr").as_ref());
+    std::fs::create_dir_all(shellexpand::tilde("~/.config/watchr").as_ref());
 
     match Cli::parse().command {
         Command::Connect(args) => {
@@ -125,17 +130,29 @@ async fn run() -> Result<(), String> {
                     Ok((res, mut ws)) => {
                         info!("Connected! HTTP response: {res:?}");
 
-                        //TODO: open mpv with the file at /media
+                        //TODO: remove unwrap
+                        let mut reader = StreamDownload::new_http(format!("http://{}:{}/media", args.addr, args.port).parse().unwrap(), TempStorageProvider::new(), Settings::default()).await.unwrap();
+
+                        spawn(move || {
+                            //TODO: remove unwrap
+                            let mut writer = std::fs::OpenOptions::new().write(true).create(true).open(shellexpand::tilde("~/.config/watchr/media").to_string()).unwrap();
+                            std::io::copy(&mut reader, &mut writer);
+                        });
+
+                        let mut stream = start_mpv()?;
+                        let (reader, writer) = &mut stream.split();
 
                         loop {
                             match timeout(Duration::from_secs(20), ws.next()).await {
                                 Ok(Some(msg)) => {
                                     if let Ok(Binary(msg)) = msg {
-                                        let property = Vec::from(msg);
+                                        let mut property = Vec::from(msg);
                                         //TODO: the question mark on this line will cause a crash
                                         //on the slightest malformed message from the host
+                                        //TODO: also stop unwrapping!
                                         let value = property.split_off(property.binary_search(&0u8).map_err(|e| format!("Received message is not valid: {e}"))? + 1);
-                                        //TODO: update mpv
+                                        writer.write(make_command(json!(["set_property_string", String::from_utf8(property).unwrap(), String::from_utf8(value).unwrap()])).as_bytes());
+                                        writer.write(&[b'\n']);
                                     }
                                 },
                                 Ok(None) => {
@@ -168,41 +185,34 @@ async fn run() -> Result<(), String> {
                 .bind((addr, port))
                 .or_else(|e| Err(format!("Failed to bind to address: {e}")))?;
 
-            process::Command::new("mpv")
-                .arg(format!("--input-ipc-server={}", shellexpand::tilde("~/.config/watchr/sock")))
-                .arg(shellexpand::tilde(file.as_ref()))
-                .output()
-                .or_else(|e| Err(format!("Failed to execute mpv: {e}")))?;
-
-            spawn(move || async {
-                let mut stream = UnixStream::connect(shellexpand::tilde("~/.config/watchr/sock").as_ref())
-                    .or_else(|e| Err(format!("Failed to open UNIX socket: {e}")))?;
-                let mut writer = BufWriter::new(stream);
-                let mut reader = BufReader::new(stream);
+            spawn(move || {
+                let mut stream = start_mpv().unwrap();
+                //TODO: remove unwrap
+                let (reader, writer) = &mut stream.split();
 
                 //TODO: probably not necessary
-                // writer.write(make_command(json!(["disable_event", "all"])));
-                // writer.write(&['\n']);
+                // writer.write(make_command(json!(["disable_event", "all"])).as_bytes());
+                // writer.write(&[b'\n']);
 
-                writer.write(make_command(json!(["observe_property_string", 1, "pause"])));
-                writer.write(&['\n']);
+                writer.write(make_command(json!(["observe_property_string", 1, "pause"])).as_bytes());
+                writer.write(&[b'\n']);
 
-                writer.write(make_command(json!(["observe_property_string", 2, "playback-time"]))); //TODO: this might get weird
-                writer.write(&['\n']);
+                writer.write(make_command(json!(["observe_property_string", 2, "playback-time"])).as_bytes()); //TODO: this might get weird
+                writer.write(&[b'\n']);
 
                 writer.flush();
 
+                let mut reader = BufReader::new(SyncIoBridge::new(reader));
                 loop {
-                    for line in reader.lines() {
-                        match line {
-                            Ok(string) => match serde_json::from_str::<IpcEvent>(string.as_ref()) {
-                                Ok(event) => if (event.event == String::from("property-change")) {
-                                    get_clients().update(event.name, event.data).await;
-                                },
-                                Err(_) => {}
-                            },
-                            Err(_) => {}
-                        }
+                    let mut line = "".to_string();
+                    reader.read_line(&mut line);
+
+                    match serde_json::from_str::<IpcEvent>(&line) {
+                        Ok(event) => if event.event == String::from("property-change") {
+                            //TODO: bad block_on?
+                            block_on(get_clients().update(event.name, event.data));
+                        },
+                        Err(_) => {}
                     }
                 }
             });
@@ -225,8 +235,8 @@ async fn api(req: HttpRequest, stream: Payload, args: Data<ServerArgs>) -> Resul
 
 #[get("/media")]
 async fn media(req: HttpRequest, args: Data<ServerArgs>) -> impl Responder {
-    match NamedFile::open_async(shellexpand::tilde(args.file.as_ref())).await {
-        Ok(res) => res,
+    match NamedFile::open_async(shellexpand::tilde(&args.file).as_ref()).await {
+        Ok(res) => res.respond_to(&req),
         Err(_) => HttpResponse::InternalServerError().finish()
     }
 }

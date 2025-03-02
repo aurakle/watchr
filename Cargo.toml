@@ -11,7 +11,11 @@ awc = "3.5.1"
 clap = { version = "4.5.31", features = ["derive"] }
 env_logger = "0.11.6"
 futures = "0.3.31"
+futures-util = { version = "0.3.31", features = ["tokio-io"] }
 log = "0.4.26"
-serde = "1.0.218"
+serde = { version = "1.0.218", features = ["derive"] }
 serde_json = "1.0.139"
 shellexpand = "3.1.0"
+stream-download = { version = "0.15.1", features = ["async-read"] }
+tokio = "1.43.0"
+tokio-util = { version = "0.7.13", features = ["io", "io-util"] }
