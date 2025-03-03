@@ -99,7 +99,7 @@ impl Clients {
         sessions.retain_mut(|session| do_retain.pop().unwrap());
 
         let len = sessions.len();
-        info!("{} client{} updated", len, if len == 1 { "" } else { "s" });
+        info!("{} client{} updated ({} = {})", len, if len == 1 { "" } else { "s" }, property, value);
     }
 }
 
@@ -166,7 +166,7 @@ async fn run() -> Result<(), String> {
                                         //TODO: the question mark on this line will cause a crash
                                         //on the slightest malformed message from the host
                                         //TODO: also stop unwrapping!
-                                        let value = property.split_off(property.binary_search(&0u8).map_err(|e| format!("Received message is not valid: {e}"))? + 1);
+                                        let value = property.split_off(*property.iter().find(|b| **b == 0u8).unwrap() as usize + 1);
                                         writer.write(make_command(json!(["set_property_string", String::from_utf8(property).unwrap(), String::from_utf8(value).unwrap()])).as_bytes()).await;
                                         writer.write(&[b'\n']).await;
                                     }
