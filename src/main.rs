@@ -167,7 +167,11 @@ async fn run() -> Result<(), String> {
                                         //on the slightest malformed message from the host
                                         //TODO: also stop unwrapping!
                                         let value = property.split_off(*property.iter().find(|b| **b == 0u8).unwrap() as usize + 1);
-                                        writer.write(make_command(json!(["set_property_string", String::from_utf8(property).unwrap(), String::from_utf8(value).unwrap()])).as_bytes()).await;
+                                        let property_string = String::from_utf8(property).unwrap();
+                                        let value_string = String::from_utf8(value).unwrap();
+
+                                        info!("Setting property by IPC command ({} = {})", property_string, value_string);
+                                        writer.write(make_command(json!(["set_property_string", property_string, value_string])).as_bytes()).await;
                                         writer.write(&[b'\n']).await;
                                     }
                                 },
