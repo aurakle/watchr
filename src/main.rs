@@ -163,10 +163,8 @@ async fn run() -> Result<(), String> {
                                 Ok(Some(msg)) => {
                                     if let Ok(Binary(msg)) = msg {
                                         let mut property = Vec::from(msg);
-                                        //TODO: the question mark on this line will cause a crash
-                                        //on the slightest malformed message from the host
-                                        //TODO: also stop unwrapping!
-                                        let value = property.split_off(*property.iter().find(|b| **b == 0u8).unwrap() as usize + 1);
+                                        //TODO: stop unwrapping!
+                                        let value = property.split_off(*property.iter().find(|b| (*b).eq(&0u8)).unwrap() as usize + 1);
                                         let property_string = String::from_utf8(property).unwrap();
                                         let value_string = String::from_utf8(value).unwrap();
 
