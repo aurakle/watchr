@@ -164,7 +164,7 @@ async fn run() -> Result<(), String> {
                                     if let Ok(Binary(msg)) = msg {
                                         let mut property = Vec::from(msg);
                                         //TODO: stop unwrapping!
-                                        let value = property.split_off(*property.iter().find(|b| (*b).eq(&0u8)).unwrap() as usize + 1);
+                                        let value = property.split_off(property.iter().position(|b| *b == 0u8).unwrap() + 1);
                                         let property_string = String::from_utf8(property).unwrap();
                                         let value_string = String::from_utf8(value).unwrap();
 
