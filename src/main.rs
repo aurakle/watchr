@@ -1,4 +1,4 @@
-use std::{io::{BufRead, Read, Write}, sync::{Mutex, OnceLock}, thread::spawn, time::Duration};
+use std::{io::{BufRead, Read, Write}, path::PathBuf, sync::{Mutex, OnceLock}, thread::spawn, time::Duration};
 
 use actix_files::NamedFile;
 use actix_web::{get, rt::time::timeout, web::{self, Data, Payload}, App, Error, HttpRequest, HttpResponse, HttpServer, Responder};
@@ -12,7 +12,7 @@ use log::{error, info, warn, LevelFilter};
 use serde::Deserialize;
 use tokio::{io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader}, time::sleep};
 use serde_json::json;
-use stream_download::{storage::temp::TempStorageProvider, Settings, StreamDownload};
+use stream_download::{storage::temp::{tempfile::{self, NamedTempFile, TempPath}, TempStorageProvider}, Settings, StreamDownload};
 use util::start_mpv;
 
 use crate::util::make_command;
@@ -83,20 +83,21 @@ impl Clients {
         response.append(&mut value.as_bytes().to_vec());
 
         let mut sessions = self.connections.lock().unwrap();
-        sessions.retain_mut(|session| {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap(); //TODO: bad unwrap?
-            //TODO: bad block_on?
-            match rt.block_on(session.binary(response.clone())) {
-                Ok(_) => true,
+        let mut do_retain = Vec::new();
+
+        for session in sessions.iter_mut().rev() {
+            match session.binary(response.clone()).await {
+                Ok(_) => {
+                    do_retain.push(true);
+                },
                 Err(_) => {
                     info!("A client has disconnected");
-                    false
+                    do_retain.push(false);
                 }
             }
-        });
+        }
+
+        sessions.retain_mut(|session| do_retain.pop().unwrap());
 
         let len = sessions.len();
         info!("{} client{} updated", len, if len == 1 { "" } else { "s" });
@@ -133,14 +134,17 @@ async fn run() -> Result<(), String> {
                     Ok((res, mut ws)) => {
                         info!("Connected! HTTP response: {res:?}");
 
-                        //TODO: remove unwrap
-                        let mut reader = StreamDownload::new_http(format!("http://{}:{}/media.mkv", args.addr, args.port).parse().unwrap(), TempStorageProvider::new(), Settings::default()).await.unwrap();
-
-                        spawn(move || {
-                            //TODO: remove unwrap
-                            let mut writer = std::fs::OpenOptions::new().write(true).create(true).open(shellexpand::tilde("~/.config/watchr/media.mkv").to_string()).unwrap();
-                            std::io::copy(&mut reader, &mut writer);
-                        });
+                        //TODO: remove unwraps
+                        let mut reader = StreamDownload::new_http(
+                            format!("http://{}:{}/media.mkv", args.addr, args.port).parse().unwrap(),
+                            TempStorageProvider::with_tempfile_builder(||
+                                Ok(NamedTempFile::from_parts(
+                                    std::fs::OpenOptions::new().write(true).create(true).open(shellexpand::tilde("~/.config/watchr/media.mkv").to_string()).unwrap(),
+                                    TempPath::from_path(PathBuf::from(shellexpand::tilde("~/.config/watchr/media.mkv").to_string())))
+                                )
+                            ),
+                            Settings::default()
+                        ).await.unwrap();
 
                         let mut stream = start_mpv("~/.config/watchr/media.mkv").await?;
                         let (reader, writer) = &mut stream.split();
