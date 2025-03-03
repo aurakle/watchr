@@ -146,6 +146,8 @@ async fn run() -> Result<(), String> {
                             Settings::default()
                         ).await.unwrap();
 
+                        spawn(move || reader.read_to_end(&mut Vec::<u8>::new()));
+
                         let mut stream = start_mpv("~/.config/watchr/media.mkv").await?;
                         let (reader, writer) = &mut stream.split();
 
