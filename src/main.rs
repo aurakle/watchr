@@ -1,7 +1,7 @@
 use std::{io::{BufRead, Read, Write}, path::PathBuf, sync::{Mutex, OnceLock}, thread::spawn, time::Duration};
 
 use actix_files::NamedFile;
-use actix_web::{get, rt::time::timeout, web::{self, Data, Payload}, App, Error, HttpRequest, HttpResponse, HttpServer, Responder};
+use actix_web::{rt::time::timeout, web::{self, Data, Payload}, App, Error, HttpRequest, HttpResponse, HttpServer, Responder};
 use actix_ws::Session;
 use awc::Client;
 use awc::ws::Frame::Binary;
@@ -12,7 +12,6 @@ use log::{error, info, warn, LevelFilter};
 use serde::Deserialize;
 use tokio::{io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader}, time::sleep};
 use serde_json::json;
-use stream_download::{storage::temp::{tempfile::{self, NamedTempFile, TempPath}, TempStorageProvider}, Settings, StreamDownload};
 use util::start_mpv;
 
 use crate::util::make_command;
@@ -134,22 +133,28 @@ async fn run() -> Result<(), String> {
                     Ok((res, mut ws)) => {
                         info!("Connected! HTTP response: {res:?}");
 
-                        //TODO: remove unwraps
-                        let mut reader = StreamDownload::new_http(
-                            format!("http://{}:{}/media.mkv", args.addr, args.port).parse().unwrap(),
-                            TempStorageProvider::with_tempfile_builder(||
-                                Ok(NamedTempFile::from_parts(
-                                    std::fs::OpenOptions::new().write(true).create(true).open(shellexpand::tilde("~/.config/watchr/media.mkv").to_string()).unwrap(),
-                                    TempPath::from_path(PathBuf::from(shellexpand::tilde("~/.config/watchr/media.mkv").to_string())))
-                                )
-                            ),
-                            Settings::default()
-                        ).await.unwrap();
+                        //TODO: remove unwrap
+                        let mut stream = reqwest::get(format!("http://{}:{}/media.mkv", args.addr, args.port)).await.unwrap().bytes_stream();
 
-                        spawn(move || reader.read_to_end(&mut Vec::<u8>::new()));
+                        spawn(move || {
+                            let rt = tokio::runtime::Builder::new_current_thread()
+                                .enable_all()
+                                .build()
+                                .unwrap(); //TODO: is this unwrap bad?
+                            let mut writer = rt.block_on(tokio::fs::OpenOptions::new().write(true).create(true).open(shellexpand::tilde("~/.config/watchr/media.mkv").to_string())).unwrap();
 
-                        let mut stream = start_mpv("~/.config/watchr/media.mkv").await?;
-                        let (reader, writer) = &mut stream.split();
+                            while let Some(item) = rt.block_on(stream.next()) {
+                                match item {
+                                    Ok(bytes) => {
+                                        rt.block_on(tokio::io::copy(&mut bytes.as_ref(), &mut writer));
+                                    },
+                                    Err(_) => {}
+                                }
+                            }
+                        });
+
+                        let mut socket = start_mpv("~/.config/watchr/media.mkv").await?;
+                        let (reader, writer) = &mut socket.split();
 
                         loop {
                             match timeout(Duration::from_secs(20), ws.next()).await {
@@ -201,8 +206,8 @@ async fn run() -> Result<(), String> {
                     .build()
                     .unwrap(); //TODO: is this unwrap bad?
                 //TODO: remove unwrap
-                let mut stream = rt.block_on(start_mpv(&file)).unwrap();
-                let (reader, writer) = &mut stream.split();
+                let mut socket = rt.block_on(start_mpv(&file)).unwrap();
+                let (reader, writer) = &mut socket.split();
 
                 //TODO: probably not necessary
                 // writer.write(make_command(json!(["disable_event", "all"])).as_bytes());
@@ -237,7 +242,7 @@ async fn run() -> Result<(), String> {
     }
 }
 
-#[get("/api")]
+#[actix_web::get("/api")]
 async fn api(req: HttpRequest, stream: Payload, args: Data<ServerArgs>) -> Result<HttpResponse, Error> {
     info!("Client {} attempting to connect...", req.peer_addr().map_or("<unknown>".to_string(), |addr| addr.ip().to_canonical().to_string()));
     let (res, session, stream) = actix_ws::handle(&req, stream)?;
@@ -247,7 +252,7 @@ async fn api(req: HttpRequest, stream: Payload, args: Data<ServerArgs>) -> Resul
     Ok(res)
 }
 
-#[get("/media.mkv")]
+#[actix_web::get("/media.mkv")]
 async fn media(req: HttpRequest, args: Data<ServerArgs>) -> impl Responder {
     match NamedFile::open_async(shellexpand::tilde(&args.file).as_ref()).await {
         Ok(res) => res.respond_to(&req),
