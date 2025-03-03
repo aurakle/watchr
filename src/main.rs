@@ -159,7 +159,7 @@ async fn run() -> Result<(), String> {
                         let (reader, writer) = &mut socket.split();
 
                         loop {
-                            match timeout(Duration::from_mins(45), ws.next()).await {
+                            match timeout(Duration::from_secs(60 * 45), ws.next()).await {
                                 Ok(Some(msg)) => {
                                     if let Ok(Binary(msg)) = msg {
                                         let mut property = Vec::from(msg);
