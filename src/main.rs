@@ -153,6 +153,8 @@ async fn run() -> Result<(), String> {
                             }
                         });
 
+                        sleep(Duration::from_secs(5)).await;
+
                         let mut socket = start_mpv("~/.config/watchr/media.mkv").await?;
                         let (reader, writer) = &mut socket.split();
 
