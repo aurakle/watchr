@@ -6,10 +6,10 @@ use actix_ws::Session;
 use anyhow::{Context, Result, anyhow};
 use awc::Client;
 use awc::ws::Frame::Binary;
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use env_logger::Target;
 use futures::{select, FutureExt, StreamExt};
-use log::{error, info, warn, LevelFilter};
+use log::{info, warn, LevelFilter};
 use serde::Deserialize;
 use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, spawn, time::sleep};
 use serde_json::json;
@@ -102,7 +102,7 @@ impl Clients {
                     do_retain.push(true);
                 },
                 Err(e) => {
-                    info!("A client has disconnected {e}");
+                    info!("A client has disconnected: {e}");
                     do_retain.push(false);
                 }
             }
@@ -169,9 +169,9 @@ async fn run() -> Result<()> {
                                         let value = msg.split_off(msg.iter().position(|b| *b == 0u8)
                                             .context("Missing null byte")? + 1);
                                         let property_string = String::from_utf8(msg)
-                                            .context("Invalid utf-8 in property")?;
+                                            .context("Invalid UTF-8 in property")?;
                                         let value_string = String::from_utf8(value)
-                                            .context("Invalid utf-8 in value")?;
+                                            .context("Invalid UTF-8 in value")?;
 
                                         info!("Setting property by IPC command ({} = {})", property_string, value_string);
                                         writer.write(make_command(json!(["set_property_string", property_string, value_string])).as_bytes()).await?;
@@ -218,7 +218,7 @@ async fn run() -> Result<()> {
             })
                 .bind((addr, port))
                 .context("Failed to bind to address")?;
-            
+
             info!("Server configured, running...");
             let mut server = server.run().fuse();
             select! {

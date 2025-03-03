@@ -1,7 +1,4 @@
-use std::{
-    process::{self},
-    time::Duration,
-};
+use std::{process::{self}, time::Duration};
 
 use anyhow::{Context, Result};
 use futures::StreamExt;
@@ -21,7 +18,7 @@ pub async fn start_mpv(file: &str, suffix: &str) -> Result<UnixStream> {
     sleep(Duration::from_secs(5)).await;
     UnixStream::connect(socket_path.as_ref())
         .await
-        .with_context(|| "Failed to connect to mpv")
+        .context("Failed to connect to mpv")
 }
 
 pub fn make_command(v: Value) -> String {
@@ -54,8 +51,8 @@ pub async fn watch_mpv(file: &str) -> Result<()> {
     let (reader, writer) = &mut socket.split();
 
     //TODO: probably not necessary
-    // writer.write(make_command(json!(["disable_event", "all"])).as_bytes());
-    // writer.write(&[b'\n']);
+    // writer.write(make_command(json!(["disable_event", "all"])).as_bytes()).await?;
+    // writer.write(&[b'\n']).await?;
 
     writer.write(make_command(json!(["observe_property_string", 1, "pause"])).as_bytes()).await?;
     writer.write(&[b'\n']).await?;
