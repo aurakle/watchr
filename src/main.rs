@@ -1,18 +1,19 @@
-use std::{io::{BufRead, Read, Write}, path::PathBuf, sync::{Mutex, OnceLock}, thread::spawn, time::Duration};
+use std::{sync::{Mutex, OnceLock}, time::Duration};
 
 use actix_files::NamedFile;
 use actix_web::{rt::time::timeout, web::{self, Data, Payload}, App, Error, HttpRequest, HttpResponse, HttpServer, Responder};
 use actix_ws::Session;
+use anyhow::{Context, Result, anyhow};
 use awc::Client;
 use awc::ws::Frame::Binary;
 use clap::{Parser, Subcommand};
 use env_logger::Target;
-use futures::StreamExt;
+use futures::{select, FutureExt, StreamExt};
 use log::{error, info, warn, LevelFilter};
 use serde::Deserialize;
-use tokio::{io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader}, time::sleep};
+use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, spawn, time::sleep};
 use serde_json::json;
-use util::start_mpv;
+use util::{start_download, start_mpv, watch_mpv};
 
 use crate::util::make_command;
 
@@ -55,57 +56,70 @@ struct ClientArgs {
 #[derive(Debug, Deserialize)]
 struct IpcEvent {
     event: String,
+    #[allow(dead_code)]
     id: i32,
     data: String,
     name: String,
 }
 
 struct Clients {
-    connections: Mutex<Vec<Session>>
+    connections: Vec<Session>,
+    last_time: f32,
 }
 
 impl Clients {
     pub fn empty() -> Self {
         Self {
-            connections: Mutex::new(Vec::new())
+            connections: Vec::new(),
+            last_time: f32::MIN,
         }
     }
 
-    pub fn push(&self, session: Session) {
-        self.connections.lock().unwrap().push(session);
+    pub fn push(&mut self, session: Session) {
+        self.connections.push(session);
     }
 
-    pub async fn update(&self, property: String, value: String) {
-        let mut response = Vec::new();
-        response.append(&mut property.as_bytes().to_vec());
-        response.push(0u8);
-        response.append(&mut value.as_bytes().to_vec());
+    pub async fn update(&mut self, property: String, value: String) -> Result<()> {
+        if property == "playback-time" {
+            let value = value.parse::<f32>()?;
+            if value - self.last_time < 0.1 && value - self.last_time > 0.0 {
+                self.last_time = value;
+                return Ok(());
+            }
+            self.last_time = value;
+        }
 
-        let mut sessions = self.connections.lock().unwrap();
+        let mut message = Vec::new();
+        message.append(&mut property.as_bytes().to_vec());
+        message.push(0u8);
+        message.append(&mut value.as_bytes().to_vec());
+
         let mut do_retain = Vec::new();
 
-        for session in sessions.iter_mut().rev() {
-            match session.binary(response.clone()).await {
+        for session in self.connections.iter_mut().rev() {
+            match session.binary(message.clone()).await {
                 Ok(_) => {
                     do_retain.push(true);
                 },
-                Err(_) => {
-                    info!("A client has disconnected");
+                Err(e) => {
+                    info!("A client has disconnected {e}");
                     do_retain.push(false);
                 }
             }
         }
 
-        sessions.retain_mut(|session| do_retain.pop().unwrap());
+        self.connections.retain_mut(|_session| do_retain.pop().unwrap());
 
-        let len = sessions.len();
+        let len = self.connections.len();
         info!("{} client{} updated ({} = {})", len, if len == 1 { "" } else { "s" }, property, value);
+
+        Ok(())
     }
 }
 
-fn get_clients() -> &'static Clients {
-    static CLIENTS: OnceLock<Clients> = OnceLock::new();
-    CLIENTS.get_or_init(|| Clients::empty())
+fn get_clients() -> &'static Mutex<Clients> {
+    static CLIENTS: OnceLock<Mutex<Clients>> = OnceLock::new();
+    CLIENTS.get_or_init(|| Mutex::new(Clients::empty()))
 }
 
 #[actix_web::main]
@@ -121,8 +135,8 @@ async fn main() {
     }
 }
 
-async fn run() -> Result<(), String> {
-    std::fs::create_dir_all(shellexpand::tilde("~/.config/watchr").as_ref());
+async fn run() -> Result<()> {
+    std::fs::create_dir_all(shellexpand::tilde("~/.config/watchr").as_ref())?;
 
     match Cli::parse().command {
         Command::Connect(args) => {
@@ -133,45 +147,46 @@ async fn run() -> Result<(), String> {
                     Ok((res, mut ws)) => {
                         info!("Connected! HTTP response: {res:?}");
 
-                        //TODO: remove unwrap
-                        let mut stream = reqwest::get(format!("http://{}:{}/media.mkv", args.addr, args.port)).await.unwrap().bytes_stream();
-
-                        spawn(move || {
-                            let rt = tokio::runtime::Builder::new_current_thread()
-                                .enable_all()
-                                .build()
-                                .unwrap(); //TODO: is this unwrap bad?
-                            let mut writer = rt.block_on(tokio::fs::OpenOptions::new().write(true).create(true).open(shellexpand::tilde("~/.config/watchr/media.mkv").to_string())).unwrap();
-
-                            while let Some(item) = rt.block_on(stream.next()) {
-                                match item {
-                                    Ok(bytes) => {
-                                        rt.block_on(tokio::io::copy(&mut bytes.as_ref(), &mut writer));
-                                    },
-                                    Err(_) => {}
-                                }
+                        let addr = args.addr.clone();
+                        spawn(async move {
+                            if let Err(e) = start_download(&addr, args.port).await {
+                                error!("Failure in download task: {e}");
                             }
                         });
 
                         sleep(Duration::from_secs(5)).await;
 
-                        let mut socket = start_mpv("~/.config/watchr/media.mkv").await?;
+                        let mut socket = start_mpv("~/.config/watchr/media.mkv", "client").await?;
                         let (reader, writer) = &mut socket.split();
+                        let mut reader = BufReader::new(reader);
 
                         loop {
                             match timeout(Duration::from_secs(60 * 45), ws.next()).await {
-                                Ok(Some(msg)) => {
-                                    if let Ok(Binary(msg)) = msg {
-                                        let mut property = Vec::from(msg);
-                                        //TODO: stop unwrapping!
-                                        let value = property.split_off(property.iter().position(|b| *b == 0u8).unwrap() + 1);
-                                        let property_string = String::from_utf8(property).unwrap();
-                                        let value_string = String::from_utf8(value).unwrap();
+                                Ok(Some(Ok(msg))) => {
+                                    if let Binary(msg) = msg {
+                                        let mut msg = Vec::from(msg);
+
+                                        let value = msg.split_off(msg.iter().position(|b| *b == 0u8)
+                                            .context("Missing null byte")? + 1);
+                                        let property_string = String::from_utf8(msg)
+                                            .context("Invalid utf-8 in property")?;
+                                        let value_string = String::from_utf8(value)
+                                            .context("Invalid utf-8 in value")?;
 
                                         info!("Setting property by IPC command ({} = {})", property_string, value_string);
-                                        writer.write(make_command(json!(["set_property_string", property_string, value_string])).as_bytes()).await;
-                                        writer.write(&[b'\n']).await;
+                                        writer.write(make_command(json!(["set_property_string", property_string, value_string])).as_bytes()).await?;
+                                        writer.write(&[b'\n']).await?;
+
+                                        // Wait for a response
+                                        // TODO: maybe wait for a specific response?
+                                        let mut line = "".to_string();
+                                        reader.read_line(&mut line).await?;
                                     }
+                                },
+                                Ok(Some(Err(e))) => {
+                                    warn!("Protocol error! Attempting to reconnect in 5 seconds. ({e})");
+                                    sleep(Duration::from_secs(5)).await;
+                                    break;
                                 },
                                 Ok(None) => {
                                     warn!("Got disconnected! Attempting to reconnect in 5 seconds.");
@@ -202,56 +217,24 @@ async fn run() -> Result<(), String> {
                     .service(api)
             })
                 .bind((addr, port))
-                .or_else(|e| Err(format!("Failed to bind to address: {e}")))?;
-
-            spawn(move || {
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .unwrap(); //TODO: is this unwrap bad?
-                //TODO: remove unwrap
-                let mut socket = rt.block_on(start_mpv(&file)).unwrap();
-                let (reader, writer) = &mut socket.split();
-
-                //TODO: probably not necessary
-                // writer.write(make_command(json!(["disable_event", "all"])).as_bytes());
-                // writer.write(&[b'\n']);
-
-                rt.block_on(writer.write(make_command(json!(["observe_property_string", 1, "pause"])).as_bytes()));
-                rt.block_on(writer.write(&[b'\n']));
-
-                rt.block_on(writer.write(make_command(json!(["observe_property_string", 2, "playback-time"])).as_bytes())); //TODO: this might get weird
-                rt.block_on(writer.write(&[b'\n']));
-
-                rt.block_on(writer.flush());
-
-                let mut reader = BufReader::new(reader);
-                loop {
-                    let mut line = "".to_string();
-                    rt.block_on(reader.read_line(&mut line));
-
-                    match serde_json::from_str::<IpcEvent>(&line) {
-                        Ok(event) => if event.event == String::from("property-change") {
-                            //TODO: bad block_on?
-                            rt.block_on(get_clients().update(event.name, event.data));
-                        },
-                        Err(_) => {}
-                    }
-                }
-            });
-
+                .context("Failed to bind to address")?;
+            
             info!("Server configured, running...");
-            server.run().await.or_else(|e| Err(format!("{e}")))
+            let mut server = server.run().fuse();
+            select! {
+                result = watch_mpv(&file).fuse() => result,
+                result = server => result.map_err(|e| anyhow!("Failed to run server {}", e)),
+            }
         }
     }
 }
 
 #[actix_web::get("/api")]
-async fn api(req: HttpRequest, stream: Payload, args: Data<ServerArgs>) -> Result<HttpResponse, Error> {
+async fn api(req: HttpRequest, stream: Payload, _args: Data<ServerArgs>) -> Result<HttpResponse, Error> {
     info!("Client {} attempting to connect...", req.peer_addr().map_or("<unknown>".to_string(), |addr| addr.ip().to_canonical().to_string()));
-    let (res, session, stream) = actix_ws::handle(&req, stream)?;
+    let (res, session, _stream) = actix_ws::handle(&req, stream)?;
 
-    get_clients().push(session);
+    get_clients().lock().unwrap().push(session);
     info!("Client connected!");
     Ok(res)
 }
