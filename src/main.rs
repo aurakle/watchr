@@ -228,11 +228,6 @@ async fn run() -> Result<()> {
                                     sleep(Duration::from_secs(5)).await;
                                     break;
                                 }
-                                // Err(_) => {
-                                //     warn!("Timed out! Attempting to reconnect in 5 seconds.");
-                                //     sleep(Duration::from_secs(5)).await;
-                                //     break;
-                                // }
                             }
                         }
                     },
