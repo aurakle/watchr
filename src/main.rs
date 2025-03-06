@@ -187,7 +187,7 @@ async fn run() -> Result<()> {
                         info!("Initialized mpv, listening for property updates...");
 
                         loop {
-                            match ws.next().await {
+                            match timeout(Duration::from_secs(60 * 45), ws.next()).await {
                                 Ok(Some(Ok(msg))) => {
                                     if let Binary(msg) = msg {
                                         let mut msg = Vec::from(msg);
