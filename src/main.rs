@@ -194,7 +194,7 @@ async fn run() -> Result<()> {
                                 .await
                                 .unwrap();
 
-                            tokio::io::copy(&mut reader, &mut writer);
+                            tokio::io::copy(&mut reader, &mut writer).await;
                         });
 
                         loop {
