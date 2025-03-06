@@ -187,7 +187,7 @@ async fn run() -> Result<()> {
                         info!("Initialized mpv, listening for property updates...");
 
                         loop {
-                            match timeout(Duration::from_secs(60 * 45), ws.next()).await {
+                            match ws.next().await {
                                 Ok(Some(Ok(msg))) => {
                                     if let Binary(msg) = msg {
                                         let mut msg = Vec::from(msg);
@@ -205,7 +205,8 @@ async fn run() -> Result<()> {
 
                                         // wait for a response
                                         let mut line = "".to_string();
-                                        reader.read_line(&mut line).await?;
+                                        //TODO: this timeout shouldn't be necessary?
+                                        timeout(Duration::from_secs(2), reader.read_line(&mut line)).await?;
                                     }
                                 },
                                 Ok(Some(Err(e))) => {
