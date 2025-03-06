@@ -172,8 +172,8 @@ async fn run() -> Result<()> {
 
                         sleep(Duration::from_secs(3)).await;
 
-                        let mut socket = start_mpv("~/.config/watchr/media.mkv", "client").await?;
-                        let (reader, writer) = &mut socket.split();
+                        let socket = start_mpv("~/.config/watchr/media.mkv", "client").await?;
+                        let (reader, mut writer) = socket.into_split();
                         let mut reader = BufReader::new(reader);
 
                         // disable events so that the pipe doesn't block
@@ -185,6 +185,13 @@ async fn run() -> Result<()> {
                         reader.read_line(&mut line).await?;
 
                         info!("Initialized mpv, listening for property updates...");
+
+                        tokio::spawn(async move {
+                            loop {
+                                let mut line = "".to_string();
+                                let _ = reader.read_line(&mut line).await;
+                            }
+                        });
 
                         loop {
                             match timeout(Duration::from_secs(60 * 45), ws.next()).await {
@@ -202,11 +209,6 @@ async fn run() -> Result<()> {
                                         info!("Setting property by IPC command ({} = {})", property_string, value_string);
                                         writer.write(make_command(json!(["set_property_string", property_string, value_string])).as_bytes()).await?;
                                         writer.write(&[b'\n']).await?;
-
-                                        // wait for a response
-                                        let mut line = "".to_string();
-                                        //TODO: this timeout shouldn't be necessary?
-                                        // timeout(Duration::from_secs(2), reader.read_line(&mut line)).await?;
                                     }
                                 },
                                 Ok(Some(Err(e))) => {
