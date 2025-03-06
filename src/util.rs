@@ -1,21 +1,26 @@
-use std::{process::{self}, time::Duration};
+use std::{path::Path, process::{self}, time::Duration};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use futures::StreamExt;
 use serde_json::{json, Value};
 use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, net::UnixStream, time::sleep};
 
-use crate::{get_clients, IpcEvent};
+use crate::{error::EmptyTimeoutError, get_clients, IpcEvent};
 
 pub async fn start_mpv(file: &str, suffix: &str) -> Result<UnixStream> {
     let socket_path = format!("~/.config/watchr/sock.{suffix}");
     let socket_path = shellexpand::tilde(&socket_path);
-    process::Command::new("mpv")
+
+    // this might error but we don't care
+    let _ = tokio::fs::remove_file(socket_path.as_ref()).await;
+    let child = process::Command::new("mpv")
         .arg(format!("--input-ipc-server={socket_path}"))
         .arg(shellexpand::tilde(file).to_string())
         .spawn()
         .context("Failed to start mpv")?;
-    sleep(Duration::from_secs(5)).await;
+
+    wait_until_file_exists(socket_path.as_ref(), 5).await?;
+
     UnixStream::connect(socket_path.as_ref())
         .await
         .context("Failed to connect to mpv")
@@ -69,4 +74,21 @@ pub async fn watch_mpv(file: &str) -> Result<()> {
             }
         }
     }
+}
+
+pub async fn wait_until_file_exists<P>(path: P, timeout: u32) -> Result<()>
+where
+    P: AsRef<Path>
+{
+    let mut time_left = timeout;
+    while !path.as_ref().exists() {
+        if time_left == 0 {
+            bail!(EmptyTimeoutError("waiting for file existence".to_string()));
+        }
+
+        sleep(Duration::from_secs(1)).await;
+        time_left -= 1;
+    }
+
+    Ok(())
 }

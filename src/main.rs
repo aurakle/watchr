@@ -18,10 +18,11 @@ use util::{start_download, start_mpv, watch_mpv};
 use crate::util::make_command;
 
 mod util;
+mod error;
 
 #[derive(Debug, Parser)]
 #[command(name = "watchr")]
-#[command(about = "TODO", long_about = None)]
+#[command(about = "Peer-to-peer Watch Together for local files", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
