@@ -214,6 +214,8 @@ async fn run() -> Result<()> {
                                         writer.write(make_command(json!(["set_property_string", property_string, value_string])).as_bytes()).await?;
                                         writer.write(&[b'\n']).await?;
                                     }
+
+                                    warn!("Received message, but it was not binary: {msg}");
                                 },
                                 Some(Err(e)) => {
                                     warn!("Protocol error! Attempting to reconnect in 5 seconds. ({e})");
