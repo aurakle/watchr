@@ -50,14 +50,10 @@ pub async fn watch_mpv(file: &str) -> Result<()> {
     let mut socket = start_mpv(&file, "server").await?;
     let (reader, writer) = &mut socket.split();
 
-    //TODO: probably not necessary
-    // writer.write(make_command(json!(["disable_event", "all"])).as_bytes()).await?;
-    // writer.write(&[b'\n']).await?;
-
     writer.write(make_command(json!(["observe_property_string", 1, "pause"])).as_bytes()).await?;
     writer.write(&[b'\n']).await?;
 
-    writer.write(make_command(json!(["observe_property_string", 2, "playback-time"])).as_bytes()).await?; //TODO: this might get weird
+    writer.write(make_command(json!(["observe_property_string", 2, "playback-time"])).as_bytes()).await?;
     writer.write(&[b'\n']).await?;
 
     writer.flush().await?;

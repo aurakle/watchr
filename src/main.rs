@@ -160,6 +160,9 @@ async fn run() -> Result<()> {
                         let (reader, writer) = &mut socket.split();
                         let mut reader = BufReader::new(reader);
 
+                        // disable events so that the pipe doesn't block
+                        writer.write(make_command(json!(["disable_event", "all"])).as_bytes()).await?;
+
                         loop {
                             match timeout(Duration::from_secs(60 * 45), ws.next()).await {
                                 Ok(Some(Ok(msg))) => {
@@ -177,8 +180,7 @@ async fn run() -> Result<()> {
                                         writer.write(make_command(json!(["set_property_string", property_string, value_string])).as_bytes()).await?;
                                         writer.write(&[b'\n']).await?;
 
-                                        // Wait for a response
-                                        // TODO: maybe wait for a specific response?
+                                        // wait for a response
                                         let mut line = "".to_string();
                                         reader.read_line(&mut line).await?;
                                     }
