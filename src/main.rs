@@ -213,9 +213,10 @@ async fn run() -> Result<()> {
                                         info!("Setting property by IPC command ({} = {})", property_string, value_string);
                                         writer.write(make_command(json!(["set_property_string", property_string, value_string])).as_bytes()).await?;
                                         writer.write(&[b'\n']).await?;
+                                    } else {
+                                        warn!("Received message, but it was not binary: {msg:?}");
                                     }
 
-                                    warn!("Received message, but it was not binary: {msg}");
                                 },
                                 Some(Err(e)) => {
                                     warn!("Protocol error! Attempting to reconnect in 5 seconds. ({e})");
