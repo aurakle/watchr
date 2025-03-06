@@ -187,10 +187,14 @@ async fn run() -> Result<()> {
                         info!("Initialized mpv, listening for property updates...");
 
                         tokio::spawn(async move {
-                            loop {
-                                let mut line = "".to_string();
-                                let _ = reader.read_line(&mut line).await;
-                            }
+                            let mut writer = tokio::fs::OpenOptions::new()
+                                .write(true)
+                                .create(true)
+                                .open(shellexpand::tilde("~/.config/watchr/log.mpv").to_string())
+                                .await
+                                .unwrap();
+
+                            tokio::io::copy(&mut reader, &mut writer);
                         });
 
                         loop {
