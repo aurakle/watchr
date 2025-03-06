@@ -198,8 +198,8 @@ async fn run() -> Result<()> {
                         });
 
                         loop {
-                            match timeout(Duration::from_secs(60 * 45), ws.next()).await {
-                                Ok(Some(Ok(msg))) => {
+                            match ws.next().await {
+                                Some(Ok(msg)) => {
                                     if let Binary(msg) = msg {
                                         let mut msg = Vec::from(msg);
 
@@ -215,21 +215,21 @@ async fn run() -> Result<()> {
                                         writer.write(&[b'\n']).await?;
                                     }
                                 },
-                                Ok(Some(Err(e))) => {
+                                Some(Err(e)) => {
                                     warn!("Protocol error! Attempting to reconnect in 5 seconds. ({e})");
                                     sleep(Duration::from_secs(5)).await;
                                     break;
                                 },
-                                Ok(None) => {
+                                None => {
                                     warn!("Got disconnected! Attempting to reconnect in 5 seconds.");
                                     sleep(Duration::from_secs(5)).await;
                                     break;
-                                },
-                                Err(_) => {
-                                    warn!("Timed out! Attempting to reconnect in 5 seconds.");
-                                    sleep(Duration::from_secs(5)).await;
-                                    break;
                                 }
+                                // Err(_) => {
+                                //     warn!("Timed out! Attempting to reconnect in 5 seconds.");
+                                //     sleep(Duration::from_secs(5)).await;
+                                //     break;
+                                // }
                             }
                         }
                     },
