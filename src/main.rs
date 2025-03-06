@@ -206,7 +206,7 @@ async fn run() -> Result<()> {
                                         // wait for a response
                                         let mut line = "".to_string();
                                         //TODO: this timeout shouldn't be necessary?
-                                        timeout(Duration::from_secs(2), reader.read_line(&mut line)).await?;
+                                        // timeout(Duration::from_secs(2), reader.read_line(&mut line)).await?;
                                     }
                                 },
                                 Ok(Some(Err(e))) => {
