@@ -5,7 +5,7 @@ use futures::StreamExt;
 use serde_json::{json, Value};
 use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, net::UnixStream, time::sleep};
 
-use crate::{error::EmptyTimeoutError, get_clients, IpcEvent};
+use crate::{data::{IpcEvent, UpdatePropertyMessage}, error::TimeoutError, get_state};
 
 pub async fn start_mpv(file: &str, suffix: &str) -> Result<UnixStream> {
     let socket_path = format!("~/.config/watchr/sock.{suffix}");
@@ -70,7 +70,8 @@ pub async fn watch_mpv(file: &str) -> Result<()> {
 
         if let Ok(event) = serde_json::from_str::<IpcEvent>(&line) {
             if event.event == "property-change" {
-                get_clients().lock().unwrap().update(event.name, event.data).await?;
+                get_state().update(event.name.clone(), event.data.clone());
+                let _ = UpdatePropertyMessage::new(event.name, event.data).send_to_all().await;
             }
         }
     }
@@ -83,7 +84,7 @@ where
     let mut time_left = timeout;
     while !path.as_ref().exists() {
         if time_left == 0 {
-            bail!(EmptyTimeoutError("waiting for file existence".to_string()));
+            bail!(TimeoutError("waiting for file existence".to_string()));
         }
 
         sleep(Duration::from_secs(1)).await;

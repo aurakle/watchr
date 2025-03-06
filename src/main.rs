@@ -1,4 +1,4 @@
-use std::{sync::{Mutex, OnceLock}, time::Duration};
+use std::{collections::HashMap, sync::{Mutex, OnceLock}, time::Duration};
 
 use actix_files::NamedFile;
 use actix_web::{rt::time::timeout, web::{self, Data, Payload}, App, Error, HttpRequest, HttpResponse, HttpServer, Responder};
@@ -7,16 +7,17 @@ use anyhow::{Context, Result, anyhow};
 use awc::Client;
 use awc::ws::Frame::Binary;
 use clap::{Parser, Subcommand};
+use data::UpdatePropertyMessage;
 use env_logger::Target;
 use futures::{select, FutureExt, StreamExt};
 use log::{error, info, warn, LevelFilter};
-use serde::Deserialize;
 use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, spawn, time::sleep};
 use serde_json::json;
 use util::{start_download, start_mpv, watch_mpv};
 
 use crate::util::make_command;
 
+mod data;
 mod util;
 mod error;
 
@@ -54,13 +55,32 @@ struct ClientArgs {
     port: u16,
 }
 
-#[derive(Debug, Deserialize)]
-struct IpcEvent {
-    event: String,
-    #[allow(dead_code)]
-    id: i32,
-    data: String,
-    name: String,
+struct State {
+    properties: Mutex<HashMap<String, String>>,
+}
+
+impl State {
+    pub fn empty() -> Self {
+        Self {
+            properties: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub fn update(&self, property: String, value: String) {
+        self.properties.lock().unwrap().insert(property, value);
+    }
+
+    pub async fn sync_to(&self, session: &mut Session) {
+        //TODO: make these actually fail
+        for (k, v) in self.properties.lock().unwrap().iter() {
+            let _ = UpdatePropertyMessage::new(k, v).send_to(session).await;
+        }
+    }
+}
+
+fn get_state() -> &'static State {
+    static STATE: OnceLock<State> = OnceLock::new();
+    STATE.get_or_init(|| State::empty())
 }
 
 struct Clients {
@@ -80,20 +100,15 @@ impl Clients {
         self.connections.push(session);
     }
 
-    pub async fn update(&mut self, property: String, value: String) -> Result<()> {
-        if property == "playback-time" {
-            let value = value.parse::<f32>()?;
+    pub async fn update(&mut self, message: UpdatePropertyMessage) -> Result<()> {
+        if message.property == "playback-time" {
+            let value = message.value.parse::<f32>()?;
             if value - self.last_time < 0.1 && value - self.last_time > 0.0 {
                 self.last_time = value;
                 return Ok(());
             }
             self.last_time = value;
         }
-
-        let mut message = Vec::new();
-        message.append(&mut property.as_bytes().to_vec());
-        message.push(0u8);
-        message.append(&mut value.as_bytes().to_vec());
 
         let mut do_retain = Vec::new();
 
@@ -112,7 +127,7 @@ impl Clients {
         self.connections.retain_mut(|_session| do_retain.pop().unwrap());
 
         let len = self.connections.len();
-        info!("{} client{} updated ({} = {})", len, if len == 1 { "" } else { "s" }, property, value);
+        info!("{} client{} updated ({} = {})", len, if len == 1 { "" } else { "s" }, message.property, message.value);
 
         Ok(())
     }
@@ -155,7 +170,7 @@ async fn run() -> Result<()> {
                             }
                         });
 
-                        sleep(Duration::from_secs(5)).await;
+                        sleep(Duration::from_secs(3)).await;
 
                         let mut socket = start_mpv("~/.config/watchr/media.mkv", "client").await?;
                         let (reader, writer) = &mut socket.split();
@@ -163,6 +178,13 @@ async fn run() -> Result<()> {
 
                         // disable events so that the pipe doesn't block
                         writer.write(make_command(json!(["disable_event", "all"])).as_bytes()).await?;
+                        writer.write(&[b'\n']).await?;
+
+                        // wait for a response
+                        let mut line = "".to_string();
+                        reader.read_line(&mut line).await?;
+
+                        info!("Initialized mpv, listening for property updates...");
 
                         loop {
                             match timeout(Duration::from_secs(60 * 45), ws.next()).await {
@@ -235,10 +257,13 @@ async fn run() -> Result<()> {
 #[actix_web::get("/api")]
 async fn api(req: HttpRequest, stream: Payload, _args: Data<ServerArgs>) -> Result<HttpResponse, Error> {
     info!("Client {} attempting to connect...", req.peer_addr().map_or("<unknown>".to_string(), |addr| addr.ip().to_canonical().to_string()));
-    let (res, session, _stream) = actix_ws::handle(&req, stream)?;
+    let (res, mut session, _stream) = actix_ws::handle(&req, stream)?;
 
+    info!("Session acquired, sending current state...");
+    get_state().sync_to(&mut session).await;
     get_clients().lock().unwrap().push(session);
     info!("Client connected!");
+
     Ok(res)
 }
 
