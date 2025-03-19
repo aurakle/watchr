@@ -5,7 +5,7 @@ use futures::StreamExt;
 use serde_json::{json, Value};
 use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, net::UnixStream, time::sleep};
 
-use crate::{data::{IpcEvent, UpdatePropertyMessage}, error::TimeoutError, get_state};
+use crate::{data::{IpcEvent, UpdatePropertyMessage}, error::TimeoutError, get_clients, get_state};
 
 pub async fn start_mpv(file: &str, suffix: &str) -> Result<UnixStream> {
     let socket_path = format!("~/.config/watchr/sock.{suffix}");
@@ -62,6 +62,13 @@ pub async fn watch_mpv(file: &str) -> Result<()> {
     writer.write(&[b'\n']).await?;
 
     writer.flush().await?;
+
+    tokio::spawn(async {
+        loop {
+            sleep(Duration::from_secs(5)).await;
+            get_clients().lock().unwrap().ping().await;
+        }
+    });
 
     let mut reader = BufReader::new(reader);
     loop {

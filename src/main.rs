@@ -100,6 +100,24 @@ impl Clients {
         self.connections.push(session);
     }
 
+    pub async fn ping(&mut self) {
+        let mut do_retain = Vec::new();
+
+        for session in self.connections.iter_mut().rev() {
+            match session.binary(vec![0u8]).await {
+                Ok(_) => {
+                    do_retain.push(true);
+                },
+                Err(e) => {
+                    info!("A client has disconnected: {e}");
+                    do_retain.push(false);
+                }
+            }
+        }
+
+        self.connections.retain_mut(|_session| do_retain.pop().unwrap());
+    }
+
     pub async fn update(&mut self, message: UpdatePropertyMessage) -> Result<()> {
         if message.property == "playback-time" {
             let value = message.value.parse::<f32>()?;
@@ -201,18 +219,22 @@ async fn run() -> Result<()> {
                             match ws.next().await {
                                 Some(Ok(msg)) => {
                                     if let Binary(msg) = msg {
-                                        let mut msg = Vec::from(msg);
+                                        if msg[0] == 0u8 {
+                                            // heartbeat
+                                        } else {
+                                            let mut msg = Vec::from(msg);
 
-                                        let value = msg.split_off(msg.iter().position(|b| *b == 0u8)
-                                            .context("Missing null byte")? + 1);
-                                        let property_string = String::from_utf8(msg)
-                                            .context("Invalid UTF-8 in property")?;
-                                        let value_string = String::from_utf8(value)
-                                            .context("Invalid UTF-8 in value")?;
+                                            let value = msg.split_off(msg.iter().position(|b| *b == 0u8)
+                                                .context("Missing null byte")? + 1);
+                                            let property_string = String::from_utf8(msg)
+                                                .context("Invalid UTF-8 in property")?;
+                                            let value_string = String::from_utf8(value)
+                                                .context("Invalid UTF-8 in value")?;
 
-                                        info!("Setting property by IPC command ({} = {})", property_string, value_string);
-                                        writer.write(make_command(json!(["set_property_string", property_string, value_string])).as_bytes()).await?;
-                                        writer.write(&[b'\n']).await?;
+                                            info!("Setting property by IPC command ({} = {})", property_string, value_string);
+                                            writer.write(make_command(json!(["set_property_string", property_string, value_string])).as_bytes()).await?;
+                                            writer.write(&[b'\n']).await?;
+                                        }
                                     } else {
                                         warn!("Received message, but it was not binary: {msg:?}");
                                     }
