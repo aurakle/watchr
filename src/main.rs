@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::{Mutex, OnceLock}, time::Duration};
+use std::{collections::HashMap, sync::OnceLock, time::Duration};
 
 use actix_files::NamedFile;
 use actix_web::{rt::time::timeout, web::{self, Data, Payload}, App, Error, HttpRequest, HttpResponse, HttpServer, Responder};
@@ -11,7 +11,7 @@ use data::UpdatePropertyMessage;
 use env_logger::Target;
 use futures::{select, FutureExt, StreamExt};
 use log::{error, info, warn, LevelFilter};
-use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, spawn, time::sleep};
+use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, spawn, sync::Mutex, time::sleep};
 use serde_json::json;
 use util::{start_download, start_mpv, watch_mpv};
 
@@ -66,13 +66,13 @@ impl State {
         }
     }
 
-    pub fn update(&self, property: String, value: String) {
-        self.properties.lock().unwrap().insert(property, value);
+    pub async fn update(&self, property: String, value: String) {
+        self.properties.lock().await.insert(property, value);
     }
 
     pub async fn sync_to(&self, session: &mut Session) {
         //TODO: make these actually fail
-        for (k, v) in self.properties.lock().unwrap().iter() {
+        for (k, v) in self.properties.lock().await.iter() {
             let _ = UpdatePropertyMessage::new(k, v).send_to(session).await;
         }
     }
@@ -204,7 +204,7 @@ async fn run() -> Result<()> {
 
                         info!("Initialized mpv, listening for property updates...");
 
-                        tokio::spawn(async move {
+                        spawn(async move {
                             let mut writer = tokio::fs::OpenOptions::new()
                                 .write(true)
                                 .create(true)
@@ -288,7 +288,7 @@ async fn api(req: HttpRequest, stream: Payload, _args: Data<ServerArgs>) -> Resu
 
     info!("Session acquired, sending current state...");
     get_state().sync_to(&mut session).await;
-    get_clients().lock().unwrap().push(session);
+    get_clients().lock().await.push(session);
     info!("Client connected!");
 
     Ok(res)

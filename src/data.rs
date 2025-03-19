@@ -30,7 +30,7 @@ impl UpdatePropertyMessage {
     }
 
     pub async fn send_to_all(self) -> Result<()> {
-        get_clients().lock().unwrap().update(self).await
+        get_clients().lock().await.update(self).await
     }
 
     pub async fn send_to(self, session: &mut Session) -> Result<()> {

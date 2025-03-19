@@ -3,7 +3,7 @@ use std::{path::Path, process::{self}, time::Duration};
 use anyhow::{bail, Context, Result};
 use futures::StreamExt;
 use serde_json::{json, Value};
-use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, net::UnixStream, time::sleep};
+use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, net::UnixStream, spawn, time::sleep};
 
 use crate::{data::{IpcEvent, UpdatePropertyMessage}, error::TimeoutError, get_clients, get_state};
 
@@ -63,10 +63,10 @@ pub async fn watch_mpv(file: &str) -> Result<()> {
 
     writer.flush().await?;
 
-    tokio::spawn(async {
+    spawn(async {
         loop {
-            sleep(Duration::from_secs(5)).await;
-            get_clients().lock().unwrap().ping().await;
+            sleep(Duration::from_secs(10)).await;
+            get_clients().lock().await.ping().await;
         }
     });
 
@@ -77,7 +77,7 @@ pub async fn watch_mpv(file: &str) -> Result<()> {
 
         if let Ok(event) = serde_json::from_str::<IpcEvent>(&line) {
             if event.event == "property-change" {
-                get_state().update(event.name.clone(), event.data.clone());
+                get_state().update(event.name.clone(), event.data.clone()).await;
                 let _ = UpdatePropertyMessage::new(event.name, event.data).send_to_all().await;
             }
         }
