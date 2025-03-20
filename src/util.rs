@@ -36,6 +36,7 @@ pub async fn start_download(addr: &str, port: u16) -> Result<()> {
     let mut writer = tokio::fs::OpenOptions::new()
         .write(true)
         .create(true)
+        .truncate(true)
         .open(shellexpand::tilde("~/.config/watchr/media.mkv").to_string())
         .await?;
 
