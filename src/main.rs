@@ -15,11 +15,12 @@ use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, spawn, sync::Mutex,
 use serde_json::json;
 use util::{start_download, start_mpv, watch_mpv};
 
-use crate::util::make_command;
+use crate::{util::make_command, path::PATHS};
 
 mod data;
 mod util;
 mod error;
+mod path;
 
 #[derive(Debug, Parser)]
 #[command(name = "watchr")]
@@ -163,6 +164,11 @@ async fn main() {
         .filter_level(LevelFilter::Info)
         .init();
 
+    if let Err(e) = PATHS.make_dirs() {
+        error!("failed to make dirs: {e}");
+        return;
+    }
+
     match run().await {
         Err(message) => error!("Failure: {message}"),
         _ => ()
@@ -170,8 +176,6 @@ async fn main() {
 }
 
 async fn run() -> Result<()> {
-    std::fs::create_dir_all(shellexpand::tilde("~/.config/watchr").as_ref())?;
-
     match Cli::parse().command {
         Command::Connect(args) => {
             let client = Client::default();
@@ -190,7 +194,7 @@ async fn run() -> Result<()> {
 
                         sleep(Duration::from_secs(3)).await;
 
-                        let socket = start_mpv("~/.config/watchr/media.mkv", "client").await?;
+                        let socket = start_mpv(PATHS.media_file().to_str().unwrap(), "client").await?;
                         let (reader, mut writer) = socket.into_split();
                         let mut reader = BufReader::new(reader);
 
@@ -208,7 +212,7 @@ async fn run() -> Result<()> {
                             let mut writer = tokio::fs::OpenOptions::new()
                                 .write(true)
                                 .create(true)
-                                .open(shellexpand::tilde("~/.config/watchr/log.mpv").to_string())
+                                .open(PATHS.log_path())
                                 .await
                                 .unwrap();
 

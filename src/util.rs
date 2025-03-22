@@ -5,23 +5,28 @@ use futures::StreamExt;
 use serde_json::{json, Value};
 use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, net::UnixStream, spawn, time::sleep};
 
-use crate::{data::{IpcEvent, UpdatePropertyMessage}, error::TimeoutError, get_clients, get_state};
+use crate::{data::{IpcEvent, UpdatePropertyMessage}, error::TimeoutError, get_clients, get_state, path::PATHS};
 
 pub async fn start_mpv(file: &str, suffix: &str) -> Result<UnixStream> {
-    let socket_path = format!("~/.config/watchr/sock.{suffix}");
-    let socket_path = shellexpand::tilde(&socket_path);
+    let socket_path = PATHS.socket_path(suffix);
+    let socket_path_str = socket_path.display();
+    let file_path = if file.starts_with("~/") {
+        shellexpand::tilde(file).to_string()
+    } else {
+        file.to_string()
+    };
 
     // this might error but we don't care
-    let _ = tokio::fs::remove_file(socket_path.as_ref()).await;
+    let _ = tokio::fs::remove_file(&socket_path).await;
     let child = process::Command::new("mpv")
-        .arg(format!("--input-ipc-server={socket_path}"))
-        .arg(shellexpand::tilde(file).to_string())
+        .arg(format!("--input-ipc-server={socket_path_str}"))
+        .arg(file_path)
         .spawn()
         .context("Failed to start mpv")?;
 
-    wait_until_file_exists(socket_path.as_ref(), 5).await?;
+    wait_until_file_exists(&socket_path, 5).await?;
 
-    UnixStream::connect(socket_path.as_ref())
+    UnixStream::connect(&socket_path)
         .await
         .context("Failed to connect to mpv")
 }
@@ -37,7 +42,7 @@ pub async fn start_download(addr: &str, port: u16) -> Result<()> {
         .write(true)
         .create(true)
         .truncate(true)
-        .open(shellexpand::tilde("~/.config/watchr/media.mkv").to_string())
+        .open(PATHS.media_file())
         .await?;
 
     while let Some(item) = stream.next().await {
