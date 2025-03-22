@@ -1,6 +1,6 @@
 use actix_web::web::Bytes;
-use anyhow::Result;
 use actix_ws::Session;
+use anyhow::Result;
 use serde::Deserialize;
 
 use crate::{error::ConnectionClosedError, get_clients};
@@ -24,9 +24,12 @@ impl UpdatePropertyMessage {
     pub fn new<P, V>(property: P, value: V) -> Self
     where
         P: Into<String>,
-        V: Into<String>
+        V: Into<String>,
     {
-        Self { property: property.into(), value: value.into() }
+        Self {
+            property: property.into(),
+            value: value.into(),
+        }
     }
 
     pub async fn send_to_all(self) -> Result<()> {
@@ -34,7 +37,10 @@ impl UpdatePropertyMessage {
     }
 
     pub async fn send_to(self, session: &mut Session) -> Result<()> {
-        session.binary(self).await.map_err(|_e| ConnectionClosedError("websocket".into()).into())
+        session
+            .binary(self)
+            .await
+            .map_err(|_e| ConnectionClosedError("websocket".into()).into())
     }
 }
 

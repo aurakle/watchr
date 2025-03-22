@@ -1,7 +1,7 @@
-use std::path::PathBuf;
-use once_cell::sync::Lazy;
 use anyhow::Result;
 use dirs;
+use once_cell::sync::Lazy;
+use std::path::PathBuf;
 
 pub struct PathConfig {
     config_dir: PathBuf,
@@ -41,6 +41,4 @@ impl PathConfig {
     }
 }
 
-pub static PATHS: Lazy<PathConfig> = Lazy::new(|| {
-    PathConfig::new().unwrap()
-});
+pub static PATHS: Lazy<PathConfig> = Lazy::new(|| PathConfig::new().unwrap());

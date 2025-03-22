@@ -1,26 +1,35 @@
 use std::{collections::HashMap, sync::OnceLock, time::Duration};
 
 use actix_files::NamedFile;
-use actix_web::{rt::time::timeout, web::{self, Data, Payload}, App, Error, HttpRequest, HttpResponse, HttpServer, Responder};
+use actix_web::{
+    rt::time::timeout,
+    web::{self, Data, Payload},
+    App, Error, HttpRequest, HttpResponse, HttpServer, Responder,
+};
 use actix_ws::Session;
-use anyhow::{Context, Result, anyhow};
-use awc::Client;
+use anyhow::{anyhow, Context, Result};
 use awc::ws::Frame::Binary;
+use awc::Client;
 use clap::{Parser, Subcommand};
 use data::UpdatePropertyMessage;
 use env_logger::Target;
 use futures::{select, FutureExt, StreamExt};
 use log::{error, info, warn, LevelFilter};
-use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, spawn, sync::Mutex, time::sleep};
 use serde_json::json;
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    spawn,
+    sync::Mutex,
+    time::sleep,
+};
 use util::{start_download, start_mpv, watch_mpv};
 
-use crate::{util::make_command, path::PATHS};
+use crate::{path::PATHS, util::make_command};
 
 mod data;
-mod util;
 mod error;
 mod path;
+mod util;
 
 #[derive(Debug, Parser)]
 #[command(name = "watchr")]
@@ -108,7 +117,7 @@ impl Clients {
             match session.binary(vec![0u8]).await {
                 Ok(_) => {
                     do_retain.push(true);
-                },
+                }
                 Err(e) => {
                     info!("A client has disconnected: {e}");
                     do_retain.push(false);
@@ -116,7 +125,8 @@ impl Clients {
             }
         }
 
-        self.connections.retain_mut(|_session| do_retain.pop().unwrap());
+        self.connections
+            .retain_mut(|_session| do_retain.pop().unwrap());
     }
 
     pub async fn update(&mut self, message: UpdatePropertyMessage) -> Result<()> {
@@ -135,7 +145,7 @@ impl Clients {
             match session.binary(message.clone()).await {
                 Ok(_) => {
                     do_retain.push(true);
-                },
+                }
                 Err(e) => {
                     info!("A client has disconnected: {e}");
                     do_retain.push(false);
@@ -143,10 +153,17 @@ impl Clients {
             }
         }
 
-        self.connections.retain_mut(|_session| do_retain.pop().unwrap());
+        self.connections
+            .retain_mut(|_session| do_retain.pop().unwrap());
 
         let len = self.connections.len();
-        info!("{} client{} updated ({} = {})", len, if len == 1 { "" } else { "s" }, message.property, message.value);
+        info!(
+            "{} client{} updated ({} = {})",
+            len,
+            if len == 1 { "" } else { "s" },
+            message.property,
+            message.value
+        );
 
         Ok(())
     }
@@ -171,7 +188,7 @@ async fn main() {
 
     match run().await {
         Err(message) => error!("Failure: {message}"),
-        _ => ()
+        _ => (),
     }
 }
 
@@ -181,7 +198,11 @@ async fn run() -> Result<()> {
             let client = Client::default();
 
             loop {
-                match client.ws(format!("ws://{}:{}/api", args.addr, args.port)).connect().await {
+                match client
+                    .ws(format!("ws://{}:{}/api", args.addr, args.port))
+                    .connect()
+                    .await
+                {
                     Ok((res, mut ws)) => {
                         info!("Connected! HTTP response: {res:?}");
 
@@ -194,12 +215,15 @@ async fn run() -> Result<()> {
 
                         sleep(Duration::from_secs(3)).await;
 
-                        let socket = start_mpv(PATHS.media_file().to_str().unwrap(), "client").await?;
+                        let socket =
+                            start_mpv(PATHS.media_file().to_str().unwrap(), "client").await?;
                         let (reader, mut writer) = socket.into_split();
                         let mut reader = BufReader::new(reader);
 
                         // disable events so that the pipe doesn't block
-                        writer.write(make_command(json!(["disable_event", "all"])).as_bytes()).await?;
+                        writer
+                            .write(make_command(json!(["disable_event", "all"])).as_bytes())
+                            .await?;
                         writer.write(&[b'\n']).await?;
 
                         // wait for a response
@@ -228,42 +252,59 @@ async fn run() -> Result<()> {
                                         } else {
                                             let mut msg = Vec::from(msg);
 
-                                            let value = msg.split_off(msg.iter().position(|b| *b == 0u8)
-                                                .context("Missing null byte")? + 1);
+                                            let value = msg.split_off(
+                                                msg.iter()
+                                                    .position(|b| *b == 0u8)
+                                                    .context("Missing null byte")?
+                                                    + 1,
+                                            );
                                             let property_string = String::from_utf8(msg)
                                                 .context("Invalid UTF-8 in property")?;
                                             let value_string = String::from_utf8(value)
                                                 .context("Invalid UTF-8 in value")?;
 
-                                            info!("Setting property by IPC command ({} = {})", property_string, value_string);
-                                            writer.write(make_command(json!(["set_property_string", property_string, value_string])).as_bytes()).await?;
+                                            info!(
+                                                "Setting property by IPC command ({} = {})",
+                                                property_string, value_string
+                                            );
+                                            writer
+                                                .write(
+                                                    make_command(json!([
+                                                        "set_property_string",
+                                                        property_string,
+                                                        value_string
+                                                    ]))
+                                                    .as_bytes(),
+                                                )
+                                                .await?;
                                             writer.write(&[b'\n']).await?;
                                         }
                                     } else {
                                         warn!("Received message, but it was not binary: {msg:?}");
                                     }
-
-                                },
+                                }
                                 Some(Err(e)) => {
                                     warn!("Protocol error! Attempting to reconnect in 5 seconds. ({e})");
                                     sleep(Duration::from_secs(5)).await;
                                     break;
-                                },
+                                }
                                 None => {
-                                    warn!("Got disconnected! Attempting to reconnect in 5 seconds.");
+                                    warn!(
+                                        "Got disconnected! Attempting to reconnect in 5 seconds."
+                                    );
                                     sleep(Duration::from_secs(5)).await;
                                     break;
                                 }
                             }
                         }
-                    },
+                    }
                     Err(e) => {
                         warn!("Failed to connect to websocket: {e}");
                         sleep(Duration::from_secs(5)).await;
                     }
                 }
             }
-        },
+        }
         Command::Host(args) => {
             let ServerArgs { addr, port, file } = args.clone();
             let server = HttpServer::new(move || {
@@ -272,8 +313,8 @@ async fn run() -> Result<()> {
                     .service(media)
                     .service(api)
             })
-                .bind((addr, port))
-                .context("Failed to bind to address")?;
+            .bind((addr, port))
+            .context("Failed to bind to address")?;
 
             info!("Server configured, running...");
             let mut server = server.run().fuse();
@@ -286,8 +327,18 @@ async fn run() -> Result<()> {
 }
 
 #[actix_web::get("/api")]
-async fn api(req: HttpRequest, stream: Payload, _args: Data<ServerArgs>) -> Result<HttpResponse, Error> {
-    info!("Client {} attempting to connect...", req.peer_addr().map_or("<unknown>".to_string(), |addr| addr.ip().to_canonical().to_string()));
+async fn api(
+    req: HttpRequest,
+    stream: Payload,
+    _args: Data<ServerArgs>,
+) -> Result<HttpResponse, Error> {
+    info!(
+        "Client {} attempting to connect...",
+        req.peer_addr().map_or("<unknown>".to_string(), |addr| addr
+            .ip()
+            .to_canonical()
+            .to_string())
+    );
     let (res, mut session, _stream) = actix_ws::handle(&req, stream)?;
 
     info!("Session acquired, sending current state...");
@@ -302,6 +353,6 @@ async fn api(req: HttpRequest, stream: Payload, _args: Data<ServerArgs>) -> Resu
 async fn media(req: HttpRequest, args: Data<ServerArgs>) -> impl Responder {
     match NamedFile::open_async(shellexpand::tilde(&args.file).as_ref()).await {
         Ok(res) => res.respond_to(&req),
-        Err(_) => HttpResponse::InternalServerError().finish()
+        Err(_) => HttpResponse::InternalServerError().finish(),
     }
 }
