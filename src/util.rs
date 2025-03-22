@@ -27,6 +27,7 @@ pub async fn start_mpv(file: &str, suffix: &str) -> Result<UnixStream> {
     // this might error but we don't care
     let _ = tokio::fs::remove_file(&socket_path).await;
     let child = process::Command::new("mpv")
+        .arg("--pause")
         .arg(format!("--input-ipc-server={socket_path_str}"))
         .arg(shellexpand::tilde(file).to_string())
         .spawn()
