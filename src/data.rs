@@ -3,7 +3,7 @@ use actix_ws::Session;
 use anyhow::Result;
 use serde::Deserialize;
 
-use crate::{error::ConnectionClosedError, get_clients};
+use crate::{error::ConnectionClosedError, CLIENTS};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct IpcEvent {
@@ -33,7 +33,7 @@ impl UpdatePropertyMessage {
     }
 
     pub async fn send_to_all(self) -> Result<()> {
-        get_clients().lock().await.update(self).await
+        CLIENTS.lock().await.update(self).await
     }
 
     pub async fn send_to(self, session: &mut Session) -> Result<()> {

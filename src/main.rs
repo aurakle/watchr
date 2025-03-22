@@ -2,7 +2,6 @@ use std::{collections::HashMap, time::Duration};
 
 use actix_files::NamedFile;
 use actix_web::{
-    rt::time::timeout,
     web::{self, Data, Payload},
     App, Error, HttpRequest, HttpResponse, HttpServer, Responder,
 };
@@ -72,9 +71,7 @@ struct ClientArgs {
 struct State {
     properties: Mutex<HashMap<String, String>>,
 }
-fn get_clients() -> &'static Mutex<Clients> {
-    &CLIENTS
-}
+
 impl State {
     pub fn empty() -> Self {
         Self {
@@ -92,10 +89,6 @@ impl State {
             let _ = UpdatePropertyMessage::new(k, v).send_to(session).await;
         }
     }
-}
-
-fn get_state() -> &'static State {
-    &STATE
 }
 
 struct Clients {
@@ -342,8 +335,8 @@ async fn api(
     let (res, mut session, _stream) = actix_ws::handle(&req, stream)?;
 
     info!("Session acquired, sending current state...");
-    get_state().sync_to(&mut session).await;
-    get_clients().lock().await.push(session);
+    STATE.sync_to(&mut session).await;
+    CLIENTS.lock().await.push(session);
     info!("Client connected!");
 
     Ok(res)

@@ -17,8 +17,7 @@ use tokio::{
 use crate::{
     data::{IpcEvent, UpdatePropertyMessage},
     error::TimeoutError,
-    get_clients, get_state,
-    path::PATHS,
+    path::PATHS, CLIENTS, STATE,
 };
 
 pub async fn start_mpv(file: &str, suffix: &str) -> Result<UnixStream> {
@@ -87,7 +86,7 @@ pub async fn watch_mpv(file: &str) -> Result<()> {
     spawn(async {
         loop {
             sleep(Duration::from_secs(10)).await;
-            get_clients().lock().await.ping().await;
+            CLIENTS.lock().await.ping().await;
         }
     });
 
@@ -98,7 +97,7 @@ pub async fn watch_mpv(file: &str) -> Result<()> {
 
         if let Ok(event) = serde_json::from_str::<IpcEvent>(&line) {
             if event.event == "property-change" {
-                get_state()
+                STATE
                     .update(event.name.clone(), event.data.clone())
                     .await;
                 let _ = UpdatePropertyMessage::new(event.name, event.data)
