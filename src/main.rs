@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::OnceLock, time::Duration};
+use std::{collections::HashMap, time::Duration};
 
 use actix_files::NamedFile;
 use actix_web::{
@@ -15,6 +15,7 @@ use data::UpdatePropertyMessage;
 use env_logger::Target;
 use futures::{select, FutureExt, StreamExt};
 use log::{error, info, warn, LevelFilter};
+use once_cell::sync::Lazy;
 use serde_json::json;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -30,6 +31,9 @@ mod data;
 mod error;
 mod path;
 mod util;
+
+static CLIENTS: Lazy<Mutex<Clients>> = Lazy::new(|| Mutex::new(Clients::empty()));
+static STATE: Lazy<State> = Lazy::new(|| State::empty());
 
 #[derive(Debug, Parser)]
 #[command(name = "watchr")]
@@ -68,7 +72,9 @@ struct ClientArgs {
 struct State {
     properties: Mutex<HashMap<String, String>>,
 }
-
+fn get_clients() -> &'static Mutex<Clients> {
+    &CLIENTS
+}
 impl State {
     pub fn empty() -> Self {
         Self {
@@ -89,8 +95,7 @@ impl State {
 }
 
 fn get_state() -> &'static State {
-    static STATE: OnceLock<State> = OnceLock::new();
-    STATE.get_or_init(|| State::empty())
+    &STATE
 }
 
 struct Clients {
@@ -167,11 +172,6 @@ impl Clients {
 
         Ok(())
     }
-}
-
-fn get_clients() -> &'static Mutex<Clients> {
-    static CLIENTS: OnceLock<Mutex<Clients>> = OnceLock::new();
-    CLIENTS.get_or_init(|| Mutex::new(Clients::empty()))
 }
 
 #[actix_web::main]
