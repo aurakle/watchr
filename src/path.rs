@@ -31,8 +31,8 @@ impl PathConfig {
         self.media_file.clone()
     }
 
-    pub fn log_path(&self) -> PathBuf {
-        self.config_dir.join("log.mpv")
+    pub fn log_path(&self, suffix: &str) -> PathBuf {
+        self.config_dir.join(format!("log.{}", suffix))
     }
 
     pub fn make_dirs(&self) -> Result<()> {

@@ -236,7 +236,7 @@ async fn run() -> Result<()> {
                             let mut writer = tokio::fs::OpenOptions::new()
                                 .write(true)
                                 .create(true)
-                                .open(PATHS.log_path())
+                                .open(PATHS.log_path("mpv"))
                                 .await
                                 .unwrap();
 
