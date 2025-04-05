@@ -313,7 +313,7 @@ async fn run() -> Result<()> {
             let mut server = server.run().fuse();
             select! {
                 result = watch_mpv(&file).fuse() => result,
-                result = server => result.map_err(|e| anyhow!("Failed to run server {}", e)),
+                result = server => result.map_err(|e| anyhow!("Failed to run server: {}", e)),
             }
         }
     }
