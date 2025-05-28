@@ -1,5 +1,5 @@
 let
-  nixpkgsVer = "0ff09db9d034a04acd4e8908820ba0b410d7a33a";
+  nixpkgsVer = "7b032b3c3e83368fc9abbb95f7a5d13e0a25febd";
   pkgs = import (fetchTarball "https://github.com/NixOS/nixpkgs/archive/${nixpkgsVer}.tar.gz") { config = {}; overlays = []; };
   libs = with pkgs; [
     openssl
